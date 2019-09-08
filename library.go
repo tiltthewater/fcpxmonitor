@@ -3,9 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 /*
@@ -38,6 +38,7 @@ func NewLibrary() Library {
 }
 
 type Library struct {
+	sync.Mutex
 	Projects map[string]*Project `json:"library"`
 }
 
@@ -58,7 +59,6 @@ func (self *Library) CheckoutProject(uuid, name, host, path string, info map[str
 				},
 			},
 		}
-		log.Printf("[CHECKOUT] [%s] by %s", uuid, host)
 		return nil
 	}
 	checkouts := self.Projects[uuid].Checkouts
@@ -89,19 +89,22 @@ func (self *Library) Update(update ProjectUpdate) (int, error) {
 	if !self.HasProject(update.UUID) {
 		return http.StatusNotFound, errors.New("Project does not exist: " + update.UUID)
 	}
-	chko, hasKey := self.Projects[update.UUID].Checkouts[update.Hostname]
+	chk, hasKey := self.Projects[update.UUID].Checkouts[update.Hostname]
 	if !hasKey {
 		return http.StatusForbidden, errors.New("No previous checkout from " + update.Hostname)
 	}
-	chko.Last = Latest(update.Last, chko.Last)
+	chk.Last = Latest(update.Last, chk.Last)
 	return 0, nil
 }
 
-func (self *Library) DeregisterProjects(host string, uuids map[string]bool) (removed []string) {
+func (self *Library) DeregisterProjects(host string, openedProjects map[string]bool) (closed, removed []string) {
+	closed = []string{}
+	removed = []string{}
 	for uuid, project := range self.Projects {
 		_, hasKey := project.Checkouts[host]
-		if hasKey && !uuids[uuid] {
+		if hasKey && !openedProjects[uuid] {
 			delete(project.Checkouts, host)
+			closed = append(closed, uuid)
 		}
 	}
 	for uuid, project := range self.Projects {
@@ -110,5 +113,5 @@ func (self *Library) DeregisterProjects(host string, uuids map[string]bool) (rem
 			removed = append(removed, uuid)
 		}
 	}
-	return removed
+	return closed, removed
 }

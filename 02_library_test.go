@@ -25,7 +25,7 @@ func Test_Library_HasKey(t *testing.T) {
 
 func Test_Library_Checkout_Project(t *testing.T) {
 	library := NewLibrary()
-	err := library.CheckoutProject("1234", "Test Project", "host1", project_path, map[string]string{})
+	err := library.CheckoutProject("1234", "Test Project", "host1", testFCPXBundlePath, map[string]string{})
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -33,11 +33,11 @@ func Test_Library_Checkout_Project(t *testing.T) {
 
 func Test_Library_Checkout_Project_Conflict(t *testing.T) {
 	library := NewLibrary()
-	err := library.CheckoutProject("1234", "Test Project", "host1", project_path, map[string]string{})
+	err := library.CheckoutProject("1234", "Test Project", "host1", testFCPXBundlePath, map[string]string{})
 	if err != nil {
 		t.Fatal(err.Error())
 	}
-	err = library.CheckoutProject("1234", "Test Project", "host2", project_path, map[string]string{})
+	err = library.CheckoutProject("1234", "Test Project", "host2", testFCPXBundlePath, map[string]string{})
 	if err == nil {
 		t.Fatal("Should get an error because there's more than one host")
 		checkouts := len(library.Projects["1234"].Checkouts)
@@ -51,12 +51,12 @@ func Test_Library_Checkout_Project_Conflict(t *testing.T) {
 
 func Test_Library_Deregister_Project(t *testing.T) {
 	library := NewLibrary()
-	err := library.CheckoutProject("1234", "Test Project", "host1", project_path, map[string]string{})
+	err := library.CheckoutProject("1234", "Test Project", "host1", testFCPXBundlePath, map[string]string{})
 	if err != nil {
 		t.Error(err.Error())
 	}
 	uuids := map[string]bool{} // No open projects
-	removed := library.DeregisterProjects("host1", uuids)
+	_, removed := library.DeregisterProjects("host1", uuids)
 	if library.HasProject("1234") {
 		t.Errorf("%v\n", library)
 	}
@@ -82,7 +82,7 @@ func Test_Library_Update_404(t *testing.T) {
 
 func Test_Library_Update_No_Checkout(t *testing.T) {
 	library := NewLibrary()
-	err := library.CheckoutProject("1234", "Test Project", "host1", project_path, map[string]string{})
+	err := library.CheckoutProject("1234", "Test Project", "host1", testFCPXBundlePath, map[string]string{})
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -98,7 +98,7 @@ func Test_Library_Update_No_Checkout(t *testing.T) {
 
 func Test_Library_Update(t *testing.T) {
 	library := NewLibrary()
-	err := library.CheckoutProject("1234", "Test Project", "host1", project_path, map[string]string{})
+	err := library.CheckoutProject("1234", "Test Project", "host1", testFCPXBundlePath, map[string]string{})
 	if err != nil {
 		t.Error(err.Error())
 	}

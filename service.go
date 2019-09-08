@@ -14,25 +14,32 @@ const (
 	SERVICE_SERVER = "_fcpxmserver._tcp"
 )
 
-type Members map[string]string
+type StringMap map[string]string
 
-func NewService(hostname string, port int, serviceName string) Service {
+func NewService(hostname string, port int, serviceName string, _txtrecord *StringMap) Service {
+	txtrecord := map[string]string{}
+	if _txtrecord != nil {
+		txtrecord = *_txtrecord
+	}
 	return Service{
 		Hostname:      hostname,
 		Port:          port,
 		Name:          serviceName,
-		Members:       Members{},
-		BroadcastChan: make(chan Members, 100), // Have a buffer so we can test without having a consumer
+		TXTRecord:     txtrecord,
+		Members:       StringMap{},
+		BroadcastChan: make(chan StringMap, 100), // Have a buffer so we can test without having a consumer
 		ExitChan:      make(chan bool),
 	}
+
 }
 
 type Service struct {
 	Hostname      string
 	Port          int
 	Name          string
+	TXTRecord     map[string]string
 	Members       map[string]string
-	BroadcastChan chan Members
+	BroadcastChan chan StringMap
 	ExitChan      chan bool
 }
 
@@ -87,19 +94,25 @@ func (self *Service) callback(entry *zeroconf.ServiceEntry) error {
 }
 
 func (self *Service) broadcast() {
-	meta := []string{
-		"version=0.1.0",
+
+	txtRecord := []string{}
+	if self.TXTRecord != nil {
+		for k, v := range self.TXTRecord {
+			rec := fmt.Sprintf("%s=%s", k, v)
+			txtRecord = append(txtRecord, rec)
+		}
 	}
+
 	service, err := zeroconf.Register(
 		self.Hostname, // service instance name
 		self.Name,     // service type and protocl
 		"local.",      // service domain
 		self.Port,     // service port
-		meta,          // service metadata
+		txtRecord,     // service metadata
 		nil,           // register on all network interfaces
 	)
 	if err != nil {
-		log.Fatal(err)
+		LogError(err.Error())
 	}
 	defer service.Shutdown()
 	<-self.ExitChan
@@ -109,7 +122,7 @@ func (self *Service) discover(serviceName string) {
 
 	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
-		log.Fatal(err)
+		LogError(err.Error())
 	}
 
 	// Channel to receive discovered service entries
@@ -119,9 +132,9 @@ func (self *Service) discover(serviceName string) {
 			// log.Println("Found service:", entry.ServiceInstanceName(), entry.Text)
 			err := self.callback(entry)
 			if err != nil {
-				log.Printf("[SERVICE] [ERROR] " + err.Error())
+				LogError(fmt.Sprintf("[SERVICE] " + err.Error()))
 			} else {
-				log.Printf("[SERVICE] [FOUND] %s", entry.ServiceRecord.Instance)
+				log.Printf("👋 [%s] %s", entry.Service, entry.ServiceRecord.Instance)
 			}
 		}
 	}(entries)
@@ -130,7 +143,7 @@ func (self *Service) discover(serviceName string) {
 
 	err = resolver.Browse(ctx, serviceName, "local.", entries)
 	if err != nil {
-		log.Fatalln("Failed to browse:", err.Error())
+		LogError("[SERVICE] Failed to browse: " + err.Error())
 	}
 
 	<-ctx.Done()

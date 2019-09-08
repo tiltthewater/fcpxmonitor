@@ -4,11 +4,24 @@ Vue.prototype.$urls = {
 	library: "library",
 }
 
-Vue.filter("formatDate", function(value) {
+Vue.filter("formatSince", function(value) {
   if (value) {
     return moment.unix(value).fromNow();
   } else {
-	return "Just opened";
+	return "Opened";
+  }
+});
+
+Vue.filter("formatTime", function(value) {
+  if (value) {
+	let m = moment.unix(value)
+    return m.format("dddd MMM D @ h:mma");
+  }
+});
+
+Vue.filter("formatProjectTitle", function(value) {
+  if (value) {
+    return value.replace(/\.fcpbundle/,"");
   }
 });
 

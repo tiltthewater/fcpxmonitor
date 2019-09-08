@@ -29,4 +29,5 @@ mainLoop:
 			libsChan <- libs
 		}
 	}
+	LogWarning("[STOP] Library watch")
 }

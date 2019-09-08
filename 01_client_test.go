@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"testing"
@@ -52,8 +51,8 @@ func Test_Client_Can_Be_Marshaled(t *testing.T) {
 }
 
 func Test_Unmarshal_Client(t *testing.T) {
-	c := T_FakeClient()
-	s := c.toJSON()
+	c1 := T_FakeClient()
+	s := c1.toJSON()
 	if s == "" {
 		t.Fatal("Failed to marshal struct Client{}")
 	}
@@ -94,14 +93,14 @@ func Test_Client_Broadcast_Remove_Dead(t *testing.T) {
 func Test_Client_Broadcast(t *testing.T) {
 
 	h := &http.Server{Addr: ":1234"}
-	ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, _ := context.WithTimeout(context.Background(), 3*time.Second)
 
-	c2 := Client{}
+	c2 := &Client{}
 
 	http.HandleFunc("/_checkout", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := ioutil.ReadAll(r.Body)
 		c2, _ = ClientFromJSON(b)
-		w.WriteHeader(http.StatusAccepted)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	go h.ListenAndServe()
@@ -127,7 +126,7 @@ func Test_Client_Broadcast(t *testing.T) {
 func Test_Client_Update(t *testing.T) {
 
 	h := &http.Server{Addr: ":1234"}
-	ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, _ := context.WithTimeout(context.Background(), 3*time.Second)
 
 	update := ProjectUpdate{}
 
@@ -147,7 +146,7 @@ func Test_Client_Update(t *testing.T) {
 		Last:     t1,
 	})
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	h.Shutdown(ctx)
 
@@ -155,10 +154,4 @@ func Test_Client_Update(t *testing.T) {
 		t.Fatal(update)
 	}
 
-}
-
-func Test_Notify(t *testing.T) {
-	t.SkipNow()
-	res := NotifyAlert("Hello World!", "What you want willis?")
-	fmt.Println(res)
 }

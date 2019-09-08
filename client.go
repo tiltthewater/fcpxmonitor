@@ -4,14 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"os/user"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	APP_BUNDLE = "/Applications/FCPXMonitor.app/Contents/Resources"
 )
 
 type FCPLibraries map[string]*FCPLibrary
@@ -45,7 +54,8 @@ type Client struct {
 func (self *Client) Start() error {
 
 	usr, _ := user.Current()
-	ctx, cancel := context.WithCancel(context.Background())
+
+	ctx, shutdown := context.WithCancel(context.Background())
 
 	go WatcherOpenLibraries(self.LibsChan, time.Tick(10*time.Second), ctx)
 	fsPathsToWatch := []string{
@@ -53,24 +63,32 @@ func (self *Client) Start() error {
 		"/Volumes",
 	}
 	go WatcherPath(fsPathsToWatch, self.UpdateChan, ctx)
-	defer cancel()
 
-	log.Printf("[INFO] Client started: %s (%d)", self.Hostname, self.Port)
-
-	go func() {
+	go func(ctx context.Context) {
+		ticker_6 := time.Tick(6 * time.Minute)
+		ticker_15 := time.Tick(15 * time.Minute)
+	mLoop:
 		for {
 			select {
+			case <-ctx.Done():
+				break mLoop
+			case <-ticker_6:
+				// Every 6 minutes
+				self.Broadcast()
+			case <-ticker_15:
+				// Every 15 minutes
+				self.SendAFK(LastUSBActivity())
 			case <-self.Service.BroadcastChan:
-				/* Force broadbast whenever the members of the service
-				changes e.g. add/drops of clients/servers
-				*/
+				// Every time there are add/drops to the services list e.g. servers
 				self.Broadcast()
 			case libs := <-self.LibsChan:
+				// Every time a library is opened/closed
 				if !self.isSame(libs) {
 					self.Libraries = libs
 					self.Broadcast()
 				}
 			case lib := <-self.UpdateChan:
+				// Every time something changes inside a library
 				_, hasKey := self.Libraries[lib.UUID]
 				if hasKey {
 					self.Update(ProjectUpdate{
@@ -81,8 +99,15 @@ func (self *Client) Start() error {
 				}
 			}
 		}
-	}()
-	return self.Server()
+		LogWarning("[STOP] Client services")
+	}(ctx)
+
+	err := self.Server(ctx, shutdown) // Blocking
+
+	shutdown()
+	time.Sleep(5 * time.Second) // Wait for everything to shutdown
+	return err
+
 }
 
 func (self *Client) isSame(libs FCPLibraries) bool {
@@ -102,14 +127,14 @@ func (self *Client) Broadcast() {
 		route := fmt.Sprintf("%s/_checkout", url)
 		res, err := c.Post(route, "application/json", bytes.NewBufferString(cJSON))
 		if err != nil {
-			if connection_refused(err) {
+			if IsConnectionRefused(err) {
 				if !wasAWOL {
 					self.AWOL[hostname] = time.Now()
-					log.Printf("[AWOL] [%s] %s", hostname, url)
+					log.Printf("🏃💨 [%s] %s", hostname, url)
 				} else if time.Since(lastSeen) > 24*time.Hour {
 					delete(self.Service.Members, hostname)
 					delete(self.AWOL, hostname)
-					log.Printf("[DROPPED] [%s] %s", hostname, url)
+					log.Printf("💔 [%s] %s", hostname, url)
 				}
 			} else {
 				log.Println(err)
@@ -118,8 +143,8 @@ func (self *Client) Broadcast() {
 		}
 		b, _ := ioutil.ReadAll(res.Body)
 		bs := string(b)
-		if res.StatusCode != http.StatusAccepted {
-			log.Println(fmt.Sprintf("[WARNING] [%s] %d: %s", url, res.StatusCode, bs))
+		if res.StatusCode != http.StatusOK {
+			LogWarning(fmt.Sprintf("⚠️ [BROADCAST] [%s] %d: %s", hostname, res.StatusCode, bs))
 			continue
 		}
 		if wasAWOL {
@@ -129,24 +154,38 @@ func (self *Client) Broadcast() {
 	}
 }
 
-func (self *Client) Update(update ProjectUpdate) {
+func (self *Client) Post(route string, body []byte) {
+	var res *http.Response
+	var err error
 	for hostname, url := range self.Service.Members {
 		if !self.AWOL[hostname].IsZero() {
 			continue
 		}
 		c := NewHTTPTimeoutClient()
-		route := fmt.Sprintf("%s/_update", url)
-		b, _ := json.Marshal(update)
-		res, err := c.Post(route, "application/json", bytes.NewReader(b))
+		url := fmt.Sprintf("%s/%s", url, route)
+		if body != nil {
+			res, err = c.Post(url, "application/json", bytes.NewReader(body))
+		} else {
+			res, err = c.Head(url)
+		}
 		if err != nil {
-			continue
+			LogError(fmt.Sprintf("[%s] %s", route, err.Error()))
 		}
 		if res.StatusCode != http.StatusOK {
-			b, _ = ioutil.ReadAll(res.Body)
-			bs := string(b)
-			log.Println(fmt.Sprintf("[WARNING] [%s] %d: %s", url, res.StatusCode, bs))
+			b, _ := ioutil.ReadAll(res.Body)
+			LogWarning(fmt.Sprintf("⚠️ [%s] [%s] %d: %s", route, hostname, res.StatusCode, string(b)))
 		}
 	}
+}
+
+func (self *Client) SendAFK(afk int64) {
+	route := fmt.Sprintf("_afk/%s/%s", self.Hostname, strconv.FormatInt(afk, 10))
+	self.Post(route, nil)
+}
+
+func (self *Client) Update(update ProjectUpdate) {
+	body, _ := json.Marshal(update)
+	self.Post("_update", body)
 }
 
 func (self *Client) toJSON() string {
@@ -157,9 +196,19 @@ func (self *Client) toJSON() string {
 	return string(b)
 }
 
-func (self *Client) Server() error {
+func (self *Client) Server(ctx context.Context, shutdown context.CancelFunc) (err error) {
 
-	shutdown := make(chan bool)
+	alerter := filepath.Join(APP_BUNDLE, "alerter")
+	_, err = os.Stat(alerter)
+	if err != nil {
+		return errors.New("[client.Server] alerter not found: " + alerter)
+	}
+
+	notifier := filepath.Join(APP_BUNDLE, "notifier")
+	_, err = os.Stat(notifier)
+	if err != nil {
+		return errors.New("[client.Server] notifier not found: " + notifier)
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -173,11 +222,25 @@ func (self *Client) Server() error {
 		c.JSON(200, gin.H{"ok": self.Hostname})
 	})
 
+	r.POST("/alert", func(c *gin.Context) {
+		b, _ := ioutil.ReadAll(c.Request.Body)
+		m := NotifyMessage{}
+		json.Unmarshal(b, &m)
+		go exec.Command(alerter, m.Message).Run()
+		c.JSON(200, gin.H{"alert": m.Message})
+	})
+
 	r.POST("/notify", func(c *gin.Context) {
 		b, _ := ioutil.ReadAll(c.Request.Body)
 		m := NotifyMessage{}
 		json.Unmarshal(b, &m)
-		go NotifyAlert("Alert", m.Message)
+		go exec.Command(notifier,
+			"-title", "TTWP Notification",
+			"-sender", "com.ttwp.FCPXMonitor",
+			"-actions", "OK",
+			"-group", "1234",
+			"-message", m.Message,
+		).Run()
 		c.JSON(200, gin.H{"notify": m.Message})
 	})
 
@@ -186,13 +249,15 @@ func (self *Client) Server() error {
 	})
 
 	r.GET("/_shutdown", func(c *gin.Context) {
-		shutdown <- true
+		shutdown()
 		c.JSON(200, gin.H{"ok": "shutdown"})
 	})
 
+	log.Printf("😎 client started: %s :%d [%s]", self.Hostname, self.Port, self.Service.TXTRecord["version"])
+
 	go r.Run(fmt.Sprintf(":%d", self.Port))
 
-	<-shutdown
+	<-ctx.Done()
 
 	return nil
 

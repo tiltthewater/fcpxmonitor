@@ -21,9 +21,9 @@ func Test_Service(t *testing.T) {
 
 	go h.ListenAndServe()
 
-	client_service := NewService("megan", port, SERVICE_CLIENT)
+	client_service := NewService("megan", port, SERVICE_CLIENT, nil)
 	go client_service.Start()
-	server_service := NewService("martha", port, SERVICE_SERVER)
+	server_service := NewService("martha", port, SERVICE_SERVER, nil)
 	go server_service.Start()
 	time.Sleep(5 * time.Second)
 

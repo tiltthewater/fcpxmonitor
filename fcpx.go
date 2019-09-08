@@ -14,8 +14,10 @@ import (
 	"github.com/adrianloh/echien"
 )
 
-var re_outputs = regexp.MustCompile(`(?i)^outputs?$`)
-var re_versions = regexp.MustCompile(`(?i)[ _-]v(\d+)[a-z]?[. _-].*(mov|mp4|m4v)`)
+var (
+	re_outputs  = regexp.MustCompile(`(?i)^outputs?$`)
+	re_versions = regexp.MustCompile(`(?i)[ _-]v(\d+)[a-z]?[. _-].*(mov|mp4|m4v)`)
+)
 
 type FCPLibrary struct {
 	Name string            `json:"name"`
@@ -40,8 +42,10 @@ func NewFCPProject(bundlePath string) (lib FCPLibrary, err error) {
 		Info: map[string]string{},
 	}
 	lib.UUID, err = GetLibraryUUID(lib.Path)
-	if fn := FindLatestVersion(bundlePath); fn != "" {
-		lib.Info["version"] = fn
+	version_mtime := FindLatestVersion(bundlePath)
+	if version_mtime[0] != "" {
+		lib.Info["version"] = version_mtime[0]
+		lib.Info["version_mtime"] = version_mtime[1]
 	}
 	return lib, err
 }
@@ -63,26 +67,35 @@ func GetLatestVersionName(filenames []string) (highest string) {
 	return highest
 }
 
-func FindLatestVersion(bundlePath string) (str string) {
+func FindLatestVersion(bundlePath string) [2]string {
+
+	version_mtime := [2]string{}
+	versions := []string{}
+	mtimes := map[string]string{}
+
 	parent, _ := filepath.Split(bundlePath)
 	files, _ := ioutil.ReadDir(parent)
+
 	for _, fifo := range files {
 		if fifo.IsDir() && re_outputs.MatchString(fifo.Name()) {
 			outputs_folder := filepath.Join(parent, fifo.Name())
 			files, _ := ioutil.ReadDir(outputs_folder)
-			versions := []string{}
 			for _, fifo := range files {
 				if !fifo.IsDir() && re_versions.MatchString(fifo.Name()) {
 					versions = append(versions, fifo.Name())
+					mtimes[fifo.Name()] = strconv.FormatInt(fifo.ModTime().Unix(), 10)
 				}
 			}
 			if len(versions) > 0 {
-				return GetLatestVersionName(versions)
+				fn := GetLatestVersionName(versions)
+				version_mtime[0] = fn
+				version_mtime[1] = mtimes[fn]
+				return version_mtime
 			}
 			break
 		}
 	}
-	return str
+	return version_mtime
 }
 
 func GetLibraryUUID(libPath string) (string, error) {
@@ -164,5 +177,4 @@ func GetOpenFCPLibraries() (libs FCPLibraries, errs []error) {
 		}
 	}
 	return libs, errs
-
 }

@@ -6,39 +6,13 @@ import (
 	"log"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-func Test_Get_Latest_Version(t *testing.T) {
-
-	cases := []string{
-		"Pepsi Generation V1.mp4",
-		"Pepsi Generation v1 .mp4",
-		"Pepsi Generation v1 .mp4",
-		"Pepsi Generation v1 .mp4",
-	}
-
-	for _, testName := range cases {
-		if !re_versions.MatchString(testName) {
-			t.Fatal(testName)
-		}
-	}
-
-	versions := []string{
-		"Pepsi Generation V1.mp4",
-		"Pepsi Generation V2.mp4",
-		"Pepsi Generation V3.mp4",
-		"Pepsi Generation V4.mp4",
-	}
-	if v := GetLatestVersionName(versions); v != "Pepsi Generation V4.mp4" {
-		t.Fatal(v)
-	}
-
-}
-
 func Test_Get_Library_UUID(t *testing.T) {
-	uuid, err := GetLibraryUUID(path.Join(rundir, TEST_PROJECT_BUNDLE))
+	uuid, err := GetLibraryUUID(path.Join(buildDir, TEST_PROJECT_BUNDLE))
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -48,8 +22,8 @@ func Test_Get_Library_UUID(t *testing.T) {
 }
 
 func Test_Get_Open_Libraries(t *testing.T) {
-	fakeFCP := path.Join(rundir, "Final Cut Pro")
-	go exec.Command(fakeFCP).Run()
+	fakeFCP := filepath.Join(buildDir, "bin", "Final Cut Pro")
+	go exec.Command(fakeFCP, testFCPXBundlePath).Run()
 	time.Sleep(time.Second)
 	libs, errs := GetOpenFCPLibraries()
 	if len(errs) > 0 {
@@ -76,25 +50,16 @@ func Test_FSWatch(t *testing.T) {
 		}
 	}()
 	go func() {
-		fakefile := path.Join(project_path, "_CurrentVersion.fcpevent")
+		fakefile := path.Join(testFCPXBundlePath, "_CurrentVersion.fcpevent")
 		for i := 0; i < 5; i++ {
 			time.Sleep(time.Second)
 			data := []byte(time.Now().Format(time.RFC1123))
 			ioutil.WriteFile(fakefile, data, 0666)
 		}
 	}()
-	go WatcherPath([]string{rundir}, c, ctx)
+	go WatcherPath([]string{buildDir}, c, ctx)
 	<-ctx.Done()
 	if i != 5 {
 		t.Errorf("Did not receive 5 change messages: %d\n", i)
-	}
-}
-
-func Test_USBHeartbeat(t *testing.T) {
-	t.SkipNow()
-	time.Sleep(4 * time.Second)
-	elapsed := UsbHeartbeat()
-	if elapsed < 4 {
-		t.Fatal(elapsed)
 	}
 }

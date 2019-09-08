@@ -58,4 +58,5 @@ func WatcherPath(pathsToWatch []string, updateChan chan FCPLibrary, ctx context.
 	}()
 	<-ctx.Done()
 	es.Stop()
+	LogWarning("[STOP] Filesystem watch")
 }
