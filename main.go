@@ -58,32 +58,35 @@ func main() {
 		LogFatal(err.Error())
 	}
 
+	version := "no_version"
+
+	// Start the self updater
 	updater, err := NewUpdater(runDir, port[mode])
 	if err != nil {
-		LogFatal(err.Error())
+		LogWarning("Self-update disabled | " + err.Error())
+	} else {
+		version = updater.Hash[0:7]
+		go updater.Start(context.Background(), 1*time.Minute)
 	}
 
-	txtRecord := &StringMap{"version": updater.Hash[0:7]}
+	txtRecord := &StringMap{"version": version}
 	service := NewService(hostname, port[mode], serviceName[mode], txtRecord)
 
 	// Start autodiscovery service
 	go service.Start()
-
-	// Start the self updater
-	go updater.Start(context.Background(), 60*time.Second)
 
 	switch mode {
 	case CLIENT:
 		client := NewClient(service)
 		err = client.Start() // Blocking main loop
 		if err != nil {
-			LogFatal(err.Error())
+			LogError(err.Error())
 		}
 	case SERVER:
 		server := NewServer(service)
 		err = server.Start() // Blocking main loop
 		if err != nil {
-			LogFatal(err.Error())
+			LogError(err.Error())
 		}
 	}
 

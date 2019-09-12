@@ -4,24 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 func NewServer(service Service) Server {
-	return Server{
-		Hostname: service.Hostname,
-		Port:     service.Port,
-		Service:  service,
-		Library:  NewLibrary(),
-	}
+	cl := Server{}
+	cl.Init()
+	cl.Hostname = service.Hostname
+	cl.Port = service.Port
+	cl.Service = service
+	cl.Library = NewLibrary()
+	cl.BroadcastChan = make(chan NotifyMessage)
+	return cl
 }
 
 type AFK struct {
@@ -30,52 +30,60 @@ type AFK struct {
 }
 
 type Server struct {
-	Hostname string
-	Port     int
-	Service  Service
-	Library  Library
-	AFK      *AFK
+	Host
+	Library       Library
+	BroadcastChan chan NotifyMessage
 }
 
 type CheckoutResponse struct {
-	Checkout []string `json:"checkouts"`
-	Closed   []string `json:"closed"`
-	Errors   []string `json:"errors"`
+	Checkouts []string `json:"checkouts"`
+	Closed    []string `json:"closed"`
+	Errors    []string `json:"errors"`
 }
 
 func NewCheckout() CheckoutResponse {
 	return CheckoutResponse{
-		Checkout: []string{},
-		Closed:   []string{},
-		Errors:   []string{},
+		Checkouts: []string{},
+		Closed:    []string{},
+		Errors:    []string{},
 	}
 }
 
 func (self *Server) Start() error {
 
-	runDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
-	site_root := filepath.Join(runDir, "dist_server")
+	go func(ctx context.Context) {
+		ticker_5 := time.Tick(5 * time.Minute)
+	mLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				break mLoop
+			case m := <-self.BroadcastChan:
+				b, _ := json.Marshal(m)
+				self.Broadcast("notify", b, CBTODO)
+			case <-ticker_5:
+				self.CheckMembersAlive()
+			case <-self.Service.BroadcastChan:
+				// No use server-side for now
+			}
+		}
+	}(self.Ctx)
 
-	ctx, shutdown := context.WithCancel(context.Background())
+	return self.Listen()
+
+}
+
+func (self *Server) Listen() error {
 
 	afks := AFK{Map: map[string]int{}}
 
-	go self.Monitor(ctx)
-
-	gin.SetMode(gin.ReleaseMode)
-
-	r := gin.New()
-
-	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Request-Method", "GET")
-	})
+	r := self.Router
 
 	r.GET("/", func(c *gin.Context) {
 		// k := Kobako["index.html"]
 		// c.Header("Content-Encoding", "gzip")
 		// c.Data(200, k.contentType, k.data)
-		c.File(filepath.Join(site_root, "index.html"))
+		c.File(filepath.Join(self.Root, "index.html"))
 	})
 
 	r.GET("/js/:filename", func(c *gin.Context) {
@@ -83,7 +91,7 @@ func (self *Server) Start() error {
 		// k := Kobako[filename]
 		// c.Header("Content-Encoding", "gzip")
 		// c.Data(200, k.contentType, k.data)
-		c.File(filepath.Join(site_root, filename))
+		c.File(filepath.Join(self.Root, filename))
 	})
 
 	r.GET("/library", func(c *gin.Context) {
@@ -94,12 +102,15 @@ func (self *Server) Start() error {
 		c.JSON(200, self.Service.Members)
 	})
 
-	r.GET("/afks", func(c *gin.Context) {
-		c.JSON(200, afks.Map)
+	r.POST("/broadcast", func(c *gin.Context) {
+		m := NotifyMessage{}
+		json.NewDecoder(c.Request.Body).Decode(&m)
+		self.BroadcastChan <- m
+		c.JSON(200, gin.H{"receivers": self.Service.Members})
 	})
 
-	r.GET("/_ping", func(c *gin.Context) {
-		c.JSON(200, gin.H{self.Hostname: "pong"})
+	r.GET("/afks", func(c *gin.Context) {
+		c.JSON(200, afks.Map)
 	})
 
 	r.HEAD("/_afk/:hostname/:secondsaway", func(c *gin.Context) {
@@ -107,7 +118,7 @@ func (self *Server) Start() error {
 		secondsaway, _ := strconv.Atoi(c.Param("secondsaway"))
 		afks.Lock()
 		defer afks.Unlock()
-		self.AFK.Map[hostname] = secondsaway
+		afks.Map[hostname] = secondsaway
 		c.String(200, "ok")
 	})
 
@@ -115,69 +126,24 @@ func (self *Server) Start() error {
 
 	r.POST("/_update", self.POST_Update)
 
-	r.GET("/_shutdown", func(c *gin.Context) {
-		shutdown()
-		c.JSON(200, gin.H{"ok": "shutdown"})
-	})
-
 	r.GET("/_legs", func(c *gin.Context) {
 		// k := Kobako["abby.jpg"]
 		// c.Header("Content-Encoding", "gzip")
 		// c.Data(200, k.contentType, k.data)
-		c.File(filepath.Join(site_root, "abby.jpg"))
+		c.File(filepath.Join(self.Root, "abby.jpg"))
 	})
 
 	log.Printf("😎 server started: %s :%d [%s]", self.Hostname, self.Port, self.Service.TXTRecord["version"])
 
 	go r.Run(fmt.Sprintf(":%d", self.Port))
 
-	<-ctx.Done()
+	<-self.Ctx.Done()
 
 	return nil
 
 }
 
-func (self *Server) POST_Checkout(c *gin.Context) {
-	b, err := ioutil.ReadAll(c.Request.Body)
-	if err != nil {
-		LogError(err.Error())
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	cl, err := ClientFromJSON(b)
-	if err != nil {
-		LogError(err.Error())
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	checkout := self.Checkout(cl)
-	c.JSON(http.StatusOK, checkout)
-}
-
-func (self *Server) POST_Update(c *gin.Context) {
-	b, err := ioutil.ReadAll(c.Request.Body)
-	if err != nil {
-		LogError(err.Error())
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	update := ProjectUpdate{}
-	json.Unmarshal(b, &update)
-
-	self.Library.Lock()
-	defer self.Library.Unlock()
-
-	status, err := self.Library.Update(update)
-	if err != nil {
-		c.JSON(status, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(200, gin.H{"ok": fmt.Sprintf("%d", update.Last)})
-}
-
-func (self *Server) Checkout(cl *Client) CheckoutResponse {
+func (self *Server) Checkout(cl ClientPayload) CheckoutResponse {
 
 	self.Library.Lock()
 	defer self.Library.Unlock()
@@ -185,42 +151,36 @@ func (self *Server) Checkout(cl *Client) CheckoutResponse {
 	checkout := NewCheckout()
 
 	uuids := map[string]bool{}
+
 	for uuid, lib := range cl.Libraries {
 		err := self.Library.CheckoutProject(uuid, lib.Name, cl.Hostname, lib.Path, lib.Info)
 		if err != nil {
 			checkout.Errors = append(checkout.Errors, uuid)
 			LogError(fmt.Sprintf("[%s] %s", cl.Hostname, err.Error()))
 		} else {
-			checkout.Checkout = append(checkout.Checkout, uuid)
-			log.Printf("✅ [%s] by %s", uuid, cl.Hostname)
+			checkout.Checkouts = append(checkout.Checkouts, uuid)
 		}
 		uuids[uuid] = true
 	}
 
+	if len(checkout.Checkouts) > 0 {
+		for _, uuid := range checkout.Checkouts {
+			log.Printf("✅ [%s] by %s", uuid, cl.Hostname)
+		}
+	}
+
 	closed, removed := self.Library.DeregisterProjects(cl.Hostname, uuids)
 	checkout.Closed = closed
-	for stat, dd := range map[string][]string{"CLOSED": closed, "REMOVED": removed} {
-		for _, uuid := range dd {
-			log.Printf("⚠ [%s] %s", stat, uuid)
+
+	// Print what was removed/closed
+	if len(closed) > 0 || len(removed) > 0 {
+		for stat, dd := range map[string][]string{"CLOSED": closed, "REMOVED": removed} {
+			for _, uuid := range dd {
+				log.Printf("⚠ [%s] [%s] %s", cl.Hostname, stat, uuid)
+			}
 		}
 	}
 
 	return checkout
 
-}
-
-func (self *Server) Monitor(ctx context.Context) {
-	for {
-		// No use server-side for now
-		<-self.Service.BroadcastChan
-	}
-}
-
-func ClientFromJSON(b []byte) (*Client, error) {
-	c := &Client{}
-	err := json.Unmarshal(b, c)
-	if err != nil {
-		return c, err
-	}
-	return c, nil
 }

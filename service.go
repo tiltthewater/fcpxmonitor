@@ -30,7 +30,6 @@ func NewService(hostname string, port int, serviceName string, _txtrecord *Strin
 		BroadcastChan: make(chan StringMap, 100), // Have a buffer so we can test without having a consumer
 		ExitChan:      make(chan bool),
 	}
-
 }
 
 type Service struct {
@@ -74,7 +73,7 @@ func (self *Service) callback(entry *zeroconf.ServiceEntry) error {
 	for _, ip := range entry.AddrIPv4 {
 		url := fmt.Sprintf("http://%s:%d", ip.String(), entry.Port)
 		c := NewHTTPTimeoutClient()
-		res, err := c.Get(fmt.Sprintf("%s/_ping", url))
+		res, err := c.Head(fmt.Sprintf("%s/_ping", url))
 		if err != nil {
 			return err
 		} else if res.StatusCode != 200 {

@@ -13,7 +13,6 @@ func Test_Service(t *testing.T) {
 	port := 1234
 
 	h := &http.Server{Addr: ":1234"}
-	ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
 
 	http.HandleFunc("/_ping", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"ok":"pong"}`)
@@ -41,6 +40,6 @@ func Test_Service(t *testing.T) {
 		t.Fatal("Server did not find client")
 	}
 
-	h.Shutdown(ctx)
+	h.Shutdown(context.TODO())
 
 }

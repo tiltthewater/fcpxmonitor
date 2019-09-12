@@ -19,7 +19,7 @@ func T_FakeClient() Client {
 		Port:     1234,
 		Members:  map[string]string{"other": "http://127.0.0.1:1234"},
 	})
-	c.Libraries["1234"] = T_FakeLibrary()
+	c.Library["1234"] = T_FakeLibrary()
 	return c
 }
 
@@ -45,18 +45,20 @@ func Test_isSame(t *testing.T) {
 func Test_Client_Can_Be_Marshaled(t *testing.T) {
 	c := T_FakeClient()
 	s := c.toJSON()
-	if s == "" {
+	if len(s) == 0 {
 		t.Fatal("Failed to marshal struct Client{}")
 	}
 }
 
 func Test_Unmarshal_Client(t *testing.T) {
+
 	c1 := T_FakeClient()
 	s := c1.toJSON()
-	if s == "" {
+	if len(s) == 0 {
 		t.Fatal("Failed to marshal struct Client{}")
 	}
-	c, err := ClientFromJSON([]byte(s))
+
+	c, err := ClientFromJSON(s)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -75,7 +77,7 @@ func Test_Unmarshal_Client(t *testing.T) {
 func Test_Client_Broadcast_Remove_Dead(t *testing.T) {
 	c := T_FakeClient()
 	// This will timeout, and "other" will be added to the AWOL list
-	c.Broadcast()
+	c.ReportCheckouts()
 	_, hasKey := c.AWOL["other"]
 	if !hasKey {
 		t.Fatal("Expected 'other' to be AWOLed")
@@ -83,7 +85,7 @@ func Test_Client_Broadcast_Remove_Dead(t *testing.T) {
 	/* Dial back AWOL to two days ago, which will cause it to be removed
 	when we broadcast again */
 	c.AWOL["other"] = time.Now().AddDate(0, 0, -2)
-	c.Broadcast()
+	c.ReportCheckouts()
 	_, hasKey = c.Service.Members["other"]
 	if hasKey {
 		t.Fatal("Expected 'other' to be removed")
@@ -93,9 +95,9 @@ func Test_Client_Broadcast_Remove_Dead(t *testing.T) {
 func Test_Client_Broadcast(t *testing.T) {
 
 	h := &http.Server{Addr: ":1234"}
-	ctx, _ := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, _ := context.WithTimeout(context.Background(), time.Second)
 
-	c2 := &Client{}
+	c2 := ClientPayload{}
 
 	http.HandleFunc("/_checkout", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := ioutil.ReadAll(r.Body)
@@ -106,7 +108,7 @@ func Test_Client_Broadcast(t *testing.T) {
 	go h.ListenAndServe()
 
 	c := T_FakeClient()
-	c.Broadcast()
+	c.ReportCheckouts()
 
 	h.Shutdown(ctx)
 
@@ -126,7 +128,7 @@ func Test_Client_Broadcast(t *testing.T) {
 func Test_Client_Update(t *testing.T) {
 
 	h := &http.Server{Addr: ":1234"}
-	ctx, _ := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, _ := context.WithTimeout(context.Background(), time.Second)
 
 	update := ProjectUpdate{}
 
@@ -140,7 +142,7 @@ func Test_Client_Update(t *testing.T) {
 
 	c := T_FakeClient()
 	t1 := time.Now().Unix()
-	c.Update(ProjectUpdate{
+	c.UpdateProjectActivity(ProjectUpdate{
 		Hostname: "nobody",
 		UUID:     "1234",
 		Last:     t1,

@@ -4,10 +4,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
+)
+
+var (
+	re_idletime = regexp.MustCompile(`"HIDIdleTime" = (\d+)`)
 )
 
 func LogError(msg string) {
@@ -39,11 +46,11 @@ func LogFatal(msg string) {
 	if ok {
 		callInfo = fmt.Sprintf("[ %s ] %s line %d", funcName[lastDot+1:], sourceFile, lineNo)
 	}
-	log.Printf("🤬 %s\n\t==> %s", msg, callInfo)
+	log.Fatalf("⛔️ %s\n\t==> %s", msg, callInfo)
 }
 
-func LogWarning(msg string) {
-	log.Printf("⚠️  " + msg)
+func LogWarning(msg ...string) {
+	log.Println("⚠️ ", msg)
 }
 
 func NewHTTPTimeoutClient() *http.Client {
@@ -61,6 +68,21 @@ func Latest(unixT1 int64, unixT2 int64) int64 {
 	return unixT2
 }
 
-func IsConnectionRefused(err error) bool {
-	return strings.Contains(err.Error(), "connection refused")
+func LastUSBActivity() int64 {
+	timings := make([]int64, 0)
+	stdout, _ := exec.Command("ioreg", "-c", "IOHIDSystem").Output()
+	lines := strings.Split(string(stdout), "\n")
+	for _, line := range lines {
+		if re_idletime.MatchString(line) {
+			m := re_idletime.FindAllStringSubmatch(line, -1)
+			t, err := strconv.ParseInt(m[0][1], 10, 64)
+			if err == nil {
+				timings = append(timings, t)
+			}
+		}
+	}
+	if len(timings) == 0 {
+		return -1
+	}
+	return timings[0] / 1000000000
 }
